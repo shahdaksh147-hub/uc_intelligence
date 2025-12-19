@@ -27,7 +27,7 @@ NSE_STOCKS = [
     "IRFC.NS", "IREDA.NS", "HUDCO.NS", "NBCC.NS", "SUZLON.NS",
     "YESBANK.NS", "ADANIPOWER.NS", "TATASTEEL.NS",
     "PNB.NS", "SJVN.NS", "IOB.NS", "IDFCFIRSTB.NS",
-    "AURIGROW.NS"
+    "AURIGROW.NS","LENSKART.NS","MEESHO.NS"
 ]
 
 # -------------------------------------------------
