@@ -26,7 +26,7 @@ st.caption("Automatic NSE Scan | Candlestick + Volume | ML-based UC Probability"
 NSE_STOCKS = [
     "IRFC.NS", "IREDA.NS", "HUDCO.NS", "NBCC.NS", "SUZLON.NS",
     "YESBANK.NS", "ADANIPOWER.NS", "TATASTEEL.NS",
-    "PNB.NS", "SJVN.NS", "IOB.NS", "IDFCFIRSTB.NS"
+    "PNB.NS", "SJVN.NS", "IOB.NS", "IDFCFIRSTB.NS","AURIGROW.NS"
 ]
 
 selected_stock = st.selectbox("Select NSE Stock", NSE_STOCKS)
