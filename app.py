@@ -3,6 +3,10 @@ import yfinance as yf
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
+import requests
+import zipfile
+import io
+import datetime
 
 from ta.momentum import RSIIndicator
 from ta.trend import EMAIndicator
@@ -18,47 +22,84 @@ st.set_page_config(
 )
 
 st.title("🚀 UC Intelligence Platform (NSE)")
-st.caption("Live Rates • Mini Charts • Detailed Charts • UC Probability")
+st.caption("Auto NSE Scan • Live Rates • Charts • UC Probability")
 
 # -------------------------------------------------
-# NSE STOCK UNIVERSE (FULL & VERIFIED)
+# NSE BHAVCOPY UNIVERSE (AUTO SCAN)
 # -------------------------------------------------
-NSE_STOCKS = [
-    # PSU / Infra
-    "IRFC.NS", "IREDA.NS", "HUDCO.NS", "NBCC.NS",
-    "NATIONALUM.NS", "RCF.NS", "BEL.NS",
-    "SJVN.NS", "PNB.NS", "IOB.NS", "IDFCFIRSTB.NS",
+@st.cache_data(ttl=24 * 60 * 60, show_spinner=False)
+def get_nse_universe(min_turnover_cr=5):
+    today = datetime.date.today()
+    df = None
 
-    # Power
-    "ADANIPOWER.NS", "JPPOWER.NS",
+    for i in range(5):  # fallback for holidays
+        date = today - datetime.timedelta(days=i)
+        date_str = date.strftime("%d%b%Y").upper()
 
-    # Small & Mid Caps
-    "SUZLON.NS", "YESBANK.NS", "NESCO.NS",
-    "NAVA.NS", "EXCEL.NS", "GOWRALE.NS", "AURIGROW.NS",
+        url = (
+            "https://archives.nseindia.com/content/historical/EQUITIES/"
+            f"{date.year}/{date.strftime('%b').upper()}/"
+            f"cm{date_str}bhav.csv.zip"
+        )
 
-    # Metals
-    "TATASTEEL.NS",
+        try:
+            r = requests.get(url, timeout=10)
+            if r.status_code != 200:
+                continue
 
-    # ETFs
-    "SILVERBEES.NS", "MID150BEES.NS"
-]
+            z = zipfile.ZipFile(io.BytesIO(r.content))
+            csv_name = z.namelist()[0]
+            df = pd.read_csv(z.open(csv_name))
+            break
+        except Exception:
+            continue
+
+    if df is None:
+        return []
+
+    df.columns = df.columns.str.strip()
+    df = df[df["SERIES"] == "EQ"]
+
+    df["TURNOVER_CR"] = df["TOTTRDQTY"] * df["CLOSE"] / 1e7
+    df = df[df["TURNOVER_CR"] >= min_turnover_cr]
+
+    symbols = sorted(df["SYMBOL"].unique())
+    return [s + ".NS" for s in symbols]
 
 # -------------------------------------------------
-# FETCH LIVE DATA FOR ALL STOCKS
+# SIDEBAR SETTINGS
 # -------------------------------------------------
-st.subheader("📊 Live Rates & UC Scores (All Stocks)")
+st.sidebar.header("⚙ NSE Universe Settings")
+
+min_turnover = st.sidebar.slider(
+    "Min Daily Turnover (₹ Crores)",
+    min_value=1,
+    max_value=100,
+    value=5
+)
+
+NSE_STOCKS = get_nse_universe(min_turnover)
+
+st.sidebar.success(f"Loaded {len(NSE_STOCKS)} NSE stocks")
+
+# -------------------------------------------------
+# FETCH LIVE DATA (LIMITED FOR PERFORMANCE)
+# -------------------------------------------------
+MAX_STOCKS = 50  # safe limit for Streamlit Cloud
+scan_stocks = NSE_STOCKS[:MAX_STOCKS]
+
+st.subheader("📊 Live Rates & UC Scores (Top Universe Slice)")
 
 live_rows = []
 hist_data = {}
 
-for ticker in NSE_STOCKS:
+for ticker in scan_stocks:
     try:
         df = yf.download(ticker, period="2d", interval="5m", progress=False)
 
         if df.empty or len(df) < 20:
             continue
 
-        # Fix MultiIndex
         if isinstance(df.columns, pd.MultiIndex):
             df.columns = df.columns.get_level_values(0)
 
@@ -101,15 +142,14 @@ else:
     st.dataframe(df_live, use_container_width=True)
 
 # -------------------------------------------------
-# MINI CHARTS FOR ALL STOCKS
+# MINI CHARTS
 # -------------------------------------------------
-st.subheader("📈 Mini Charts (Last 2 Days)")
+st.subheader("📈 Mini Charts (Expandable)")
 
 for ticker in df_live["Stock"]:
-    full_ticker = ticker + ".NS"
-    df = hist_data.get(full_ticker)
-
-    if df is None or df.empty:
+    full = ticker + ".NS"
+    df = hist_data.get(full)
+    if df is None:
         continue
 
     with st.expander(ticker):
@@ -123,8 +163,8 @@ for ticker in df_live["Stock"]:
         )
         fig.update_layout(
             height=250,
-            margin=dict(l=0, r=0, t=20, b=0),
-            xaxis_rangeslider_visible=False
+            xaxis_rangeslider_visible=False,
+            margin=dict(l=0, r=0, t=20, b=0)
         )
         st.plotly_chart(fig, use_container_width=True)
 
@@ -133,7 +173,7 @@ for ticker in df_live["Stock"]:
 # -------------------------------------------------
 st.subheader("📌 Detailed Stock Analysis")
 
-selected_stock = st.selectbox("Select Stock", NSE_STOCKS)
+selected_stock = st.selectbox("Select Stock", scan_stocks)
 df = hist_data.get(selected_stock)
 
 if df is None or df.empty:
@@ -154,7 +194,7 @@ df_feat = df.dropna()
 latest = df_feat.iloc[-1]
 
 # -------------------------------------------------
-# ML UC PROBABILITY (DUMMY MODEL)
+# ML UC PROBABILITY (PLACEHOLDER)
 # -------------------------------------------------
 model = RandomForestClassifier(
     n_estimators=100,
@@ -223,4 +263,7 @@ else:
 # -------------------------------------------------
 # FOOTER
 # -------------------------------------------------
-st.caption("⚠️ Educational tool only. UC probability is not a guarantee.")
+st.caption(
+    "⚠️ Educational tool only. Uses NSE bhavcopy + Yahoo Finance. "
+    "UC probability is probabilistic, not guaranteed."
+)
