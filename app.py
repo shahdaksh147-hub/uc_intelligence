@@ -12,9 +12,9 @@ from ta.momentum import RSIIndicator
 from ta.trend import EMAIndicator
 from sklearn.ensemble import RandomForestClassifier
 
-# -------------------------------------------------
+# =================================================
 # STREAMLIT CONFIG
-# -------------------------------------------------
+# =================================================
 st.set_page_config(
     page_title="UC Intelligence Platform",
     page_icon="📈",
@@ -24,15 +24,15 @@ st.set_page_config(
 st.title("🚀 UC Intelligence Platform (NSE)")
 st.caption("Auto NSE Scan • Live Rates • Charts • UC Probability")
 
-# -------------------------------------------------
+# =================================================
 # NSE BHAVCOPY UNIVERSE (AUTO SCAN)
-# -------------------------------------------------
+# =================================================
 @st.cache_data(ttl=24 * 60 * 60, show_spinner=False)
 def get_nse_universe(min_turnover_cr=5):
     today = datetime.date.today()
     df = None
 
-    for i in range(5):  # fallback for holidays
+    for i in range(7):  # fallback for holidays/weekends
         date = today - datetime.timedelta(days=i)
         date_str = date.strftime("%d%b%Y").upper()
 
@@ -54,21 +54,24 @@ def get_nse_universe(min_turnover_cr=5):
         except Exception:
             continue
 
-    if df is None:
+    if df is None or df.empty:
         return []
 
     df.columns = df.columns.str.strip()
+
+    # Keep equity only
     df = df[df["SERIES"] == "EQ"]
 
+    # Turnover filter
     df["TURNOVER_CR"] = df["TOTTRDQTY"] * df["CLOSE"] / 1e7
     df = df[df["TURNOVER_CR"] >= min_turnover_cr]
 
     symbols = sorted(df["SYMBOL"].unique())
     return [s + ".NS" for s in symbols]
 
-# -------------------------------------------------
+# =================================================
 # SIDEBAR SETTINGS
-# -------------------------------------------------
+# =================================================
 st.sidebar.header("⚙ NSE Universe Settings")
 
 min_turnover = st.sidebar.slider(
@@ -80,26 +83,33 @@ min_turnover = st.sidebar.slider(
 
 NSE_STOCKS = get_nse_universe(min_turnover)
 
-st.sidebar.success(f"Loaded {len(NSE_STOCKS)} NSE stocks")
+st.sidebar.success(f"Universe loaded: {len(NSE_STOCKS)} stocks")
 
-# -------------------------------------------------
-# FETCH LIVE DATA (LIMITED FOR PERFORMANCE)
-# -------------------------------------------------
-MAX_STOCKS = 50  # safe limit for Streamlit Cloud
-scan_stocks = NSE_STOCKS[:MAX_STOCKS]
+# Limit scan for Streamlit Cloud safety
+MAX_STOCKS = 50
+SCAN_STOCKS = NSE_STOCKS[:MAX_STOCKS]
 
-st.subheader("📊 Live Rates & UC Scores (Top Universe Slice)")
+# =================================================
+# LIVE DATA SCAN
+# =================================================
+st.subheader("📊 Live Rates & UC Scores")
 
 live_rows = []
 hist_data = {}
 
-for ticker in scan_stocks:
+for ticker in SCAN_STOCKS:
     try:
-        df = yf.download(ticker, period="2d", interval="5m", progress=False)
+        df = yf.download(
+            ticker,
+            period="2d",
+            interval="5m",
+            progress=False
+        )
 
-        if df.empty or len(df) < 20:
+        if df is None or df.empty or len(df) < 20:
             continue
 
+        # Fix MultiIndex
         if isinstance(df.columns, pd.MultiIndex):
             df.columns = df.columns.get_level_values(0)
 
@@ -133,26 +143,32 @@ for ticker in scan_stocks:
     except Exception:
         continue
 
-df_live = pd.DataFrame(live_rows)
+# 🔴 SAFE DataFrame (schema enforced)
+df_live = pd.DataFrame(
+    live_rows,
+    columns=["Stock", "Price", "Change %", "RSI", "Vol Ratio", "UC Score (0–3)"]
+)
 
 if df_live.empty:
-    st.warning("No live data available.")
-else:
-    df_live = df_live.sort_values("UC Score (0–3)", ascending=False)
-    st.dataframe(df_live, use_container_width=True)
+    st.warning("No stocks passed filters (holiday / low liquidity). Try lowering turnover.")
+    st.stop()
 
-# -------------------------------------------------
+df_live = df_live.sort_values("UC Score (0–3)", ascending=False)
+st.dataframe(df_live, use_container_width=True)
+
+# =================================================
 # MINI CHARTS
-# -------------------------------------------------
+# =================================================
 st.subheader("📈 Mini Charts (Expandable)")
 
-for ticker in df_live["Stock"]:
-    full = ticker + ".NS"
-    df = hist_data.get(full)
-    if df is None:
+for stock in df_live["Stock"].dropna().tolist():
+    ticker = stock + ".NS"
+    df = hist_data.get(ticker)
+
+    if df is None or df.empty:
         continue
 
-    with st.expander(ticker):
+    with st.expander(stock):
         fig = go.Figure()
         fig.add_candlestick(
             x=df.index,
@@ -168,13 +184,17 @@ for ticker in df_live["Stock"]:
         )
         st.plotly_chart(fig, use_container_width=True)
 
-# -------------------------------------------------
+# =================================================
 # DETAILED STOCK VIEW
-# -------------------------------------------------
+# =================================================
 st.subheader("📌 Detailed Stock Analysis")
 
-selected_stock = st.selectbox("Select Stock", scan_stocks)
-df = hist_data.get(selected_stock)
+selected = st.selectbox(
+    "Select Stock",
+    df_live["Stock"].apply(lambda x: x + ".NS").tolist()
+)
+
+df = hist_data.get(selected)
 
 if df is None or df.empty:
     st.error("No data available for selected stock.")
@@ -193,15 +213,16 @@ df["Near_High"] = (close >= 0.99 * high.rolling(20).max()).astype(int)
 df_feat = df.dropna()
 latest = df_feat.iloc[-1]
 
-# -------------------------------------------------
+# =================================================
 # ML UC PROBABILITY (PLACEHOLDER)
-# -------------------------------------------------
+# =================================================
 model = RandomForestClassifier(
     n_estimators=100,
     max_depth=5,
     random_state=42
 )
 
+# Dummy training
 X_dummy = np.random.rand(100, 4)
 y_dummy = np.random.randint(0, 2, 100)
 model.fit(X_dummy, y_dummy)
@@ -215,17 +236,17 @@ X_live = np.array([
 
 uc_prob = model.predict_proba(X_live)[0][1] * 100
 
-# -------------------------------------------------
+# =================================================
 # METRICS
-# -------------------------------------------------
+# =================================================
 col1, col2, col3 = st.columns(3)
 col1.metric("UC Probability (%)", f"{uc_prob:.2f}")
 col2.metric("RSI", f"{latest['RSI']:.1f}")
 col3.metric("Volume Ratio", f"{latest['Vol_Ratio']:.2f}")
 
-# -------------------------------------------------
+# =================================================
 # DETAILED CHART
-# -------------------------------------------------
+# =================================================
 fig = go.Figure()
 fig.add_candlestick(
     x=df.index,
@@ -242,7 +263,7 @@ fig.add_bar(
 )
 
 fig.update_layout(
-    title=f"{selected_stock.replace('.NS','')} – Intraday Chart",
+    title=f"{selected.replace('.NS','')} – Intraday Chart",
     height=500,
     xaxis_rangeslider_visible=False,
     yaxis2=dict(overlaying="y", side="right", showgrid=False)
@@ -250,9 +271,9 @@ fig.update_layout(
 
 st.plotly_chart(fig, use_container_width=True)
 
-# -------------------------------------------------
+# =================================================
 # UC INTERPRETATION
-# -------------------------------------------------
+# =================================================
 if uc_prob >= 75:
     st.success("🔥 HIGH Upper Circuit Probability")
 elif uc_prob >= 55:
@@ -260,9 +281,9 @@ elif uc_prob >= 55:
 else:
     st.info("❄ LOW Upper Circuit Probability")
 
-# -------------------------------------------------
+# =================================================
 # FOOTER
-# -------------------------------------------------
+# =================================================
 st.caption(
     "⚠️ Educational tool only. Uses NSE bhavcopy + Yahoo Finance. "
     "UC probability is probabilistic, not guaranteed."
