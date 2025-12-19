@@ -18,59 +18,69 @@ st.set_page_config(
 )
 
 st.title("🚀 UC Intelligence Platform (NSE)")
-st.caption("Automatic NSE Scan | Live Rates | Charts | ML-based UC Probability")
+st.caption("Live Rates • Mini Charts • Detailed Charts • UC Probability")
 
 # -------------------------------------------------
-# NSE UNIVERSE
+# NSE STOCK UNIVERSE (FULL & VERIFIED)
 # -------------------------------------------------
 NSE_STOCKS = [
-    "IRFC.NS", "IREDA.NS", "HUDCO.NS", "NBCC.NS", "SUZLON.NS",
-    "YESBANK.NS", "ADANIPOWER.NS", "TATASTEEL.NS",
-    "PNB.NS", "SJVN.NS", "IOB.NS", "IDFCFIRSTB.NS",
-    "AURIGROW.NS","LENSKART.NS","MEESHO.NS"
+    # PSU / Infra
+    "IRFC.NS", "IREDA.NS", "HUDCO.NS", "NBCC.NS",
+    "NATIONALUM.NS", "RCF.NS", "BEL.NS",
+    "SJVN.NS", "PNB.NS", "IOB.NS", "IDFCFIRSTB.NS",
+
+    # Power
+    "ADANIPOWER.NS", "JPPOWER.NS",
+
+    # Small & Mid Caps
+    "SUZLON.NS", "YESBANK.NS", "NESCO.NS",
+    "NAVA.NS", "EXCEL.NS", "GOWRALE.NS", "AURIGROW.NS",
+
+    # Metals
+    "TATASTEEL.NS",
+
+    # ETFs
+    "SILVERBEES.NS", "MID150BEES.NS"
 ]
 
 # -------------------------------------------------
-# FETCH LIVE RATES FOR ALL
+# FETCH LIVE DATA FOR ALL STOCKS
 # -------------------------------------------------
 st.subheader("📊 Live Rates & UC Scores (All Stocks)")
 
-live_data = []
+live_rows = []
+hist_data = {}
 
 for ticker in NSE_STOCKS:
     try:
-        info = yf.Ticker(ticker).history(period="2d", interval="5m")
-        if info.empty:
+        df = yf.download(ticker, period="2d", interval="5m", progress=False)
+
+        if df.empty or len(df) < 20:
             continue
 
-        # Flatten MultiIndex
-        if isinstance(info.columns, pd.MultiIndex):
-            info.columns = info.columns.get_level_values(0)
+        # Fix MultiIndex
+        if isinstance(df.columns, pd.MultiIndex):
+            df.columns = df.columns.get_level_values(0)
 
-        # last row → latest data
-        latest = info.iloc[-1]
-        prev_close = info["Close"].iloc[-2]
+        hist_data[ticker] = df.copy()
 
-        price = latest["Close"]
-        change_pct = ((price - prev_close) / prev_close) * 100
+        close = df["Close"].astype(float)
+        volume = df["Volume"].astype(float)
 
-        # RSI
-        rsi = RSIIndicator(info["Close"].astype(float), 14).rsi().iloc[-1]
+        price = close.iloc[-1]
+        prev = close.iloc[-2]
+        change_pct = ((price - prev) / prev) * 100
 
-        # Volume ratio
-        vol_ratio = (
-            latest["Volume"] /
-            info["Volume"].rolling(20).mean().iloc[-1]
-        )
+        rsi = RSIIndicator(close, 14).rsi().iloc[-1]
+        vol_ratio = volume.iloc[-1] / volume.rolling(20).mean().iloc[-1]
 
-        # SIMPLE UC Score
         uc_score = sum([
             change_pct > 2,
             rsi > 60,
             vol_ratio > 2
         ])
 
-        live_data.append({
+        live_rows.append({
             "Stock": ticker.replace(".NS", ""),
             "Price": round(price, 2),
             "Change %": round(change_pct, 2),
@@ -79,61 +89,72 @@ for ticker in NSE_STOCKS:
             "UC Score (0–3)": uc_score
         })
 
-    except Exception as e:
-        pass
+    except Exception:
+        continue
 
-df_live = pd.DataFrame(live_data)
+df_live = pd.DataFrame(live_rows)
 
 if df_live.empty:
-    st.warning("No live data available right now.")
+    st.warning("No live data available.")
 else:
     df_live = df_live.sort_values("UC Score (0–3)", ascending=False)
     st.dataframe(df_live, use_container_width=True)
 
 # -------------------------------------------------
-# SELECT STOCK FOR CHART
+# MINI CHARTS FOR ALL STOCKS
 # -------------------------------------------------
-selected_stock = st.selectbox("Select Stock for Chart", NSE_STOCKS)
+st.subheader("📈 Mini Charts (Last 2 Days)")
 
-df_chart = yf.download(
-    selected_stock,
-    period="5d",
-    interval="5m",
-    progress=False
-)
+for ticker in df_live["Stock"]:
+    full_ticker = ticker + ".NS"
+    df = hist_data.get(full_ticker)
 
-if df_chart.empty:
-    st.error("No data received for the selected stock.")
+    if df is None or df.empty:
+        continue
+
+    with st.expander(ticker):
+        fig = go.Figure()
+        fig.add_candlestick(
+            x=df.index,
+            open=df["Open"],
+            high=df["High"],
+            low=df["Low"],
+            close=df["Close"]
+        )
+        fig.update_layout(
+            height=250,
+            margin=dict(l=0, r=0, t=20, b=0),
+            xaxis_rangeslider_visible=False
+        )
+        st.plotly_chart(fig, use_container_width=True)
+
+# -------------------------------------------------
+# DETAILED STOCK VIEW
+# -------------------------------------------------
+st.subheader("📌 Detailed Stock Analysis")
+
+selected_stock = st.selectbox("Select Stock", NSE_STOCKS)
+df = hist_data.get(selected_stock)
+
+if df is None or df.empty:
+    st.error("No data available for selected stock.")
     st.stop()
 
-# Flatten columns if needed
-if isinstance(df_chart.columns, pd.MultiIndex):
-    df_chart.columns = df_chart.columns.get_level_values(0)
+close = df["Close"].astype(float)
+high = df["High"].astype(float)
+volume = df["Volume"].astype(float)
 
-# -------------------------------------------------
-# FEATURE ENGINEERING FOR SELECTED STOCK
-# -------------------------------------------------
-close = df_chart["Close"].astype(float)
-high = df_chart["High"].astype(float)
-volume = df_chart["Volume"].astype(float)
+df["RSI"] = RSIIndicator(close, 14).rsi()
+df["EMA20"] = EMAIndicator(close, 20).ema_indicator()
+df["Pct_Change"] = close.pct_change() * 100
+df["Vol_Ratio"] = volume / volume.rolling(20).mean()
+df["Near_High"] = (close >= 0.99 * high.rolling(20).max()).astype(int)
 
-df_chart["RSI"] = RSIIndicator(close, window=14).rsi()
-df_chart["EMA20"] = EMAIndicator(close, window=20).ema_indicator()
-
-df_chart["Price_Change"] = close.pct_change() * 100
-df_chart["Vol_Ratio"] = volume / volume.rolling(20).mean()
-df_chart["Near_High"] = (close >= 0.99 * high.rolling(20).max()).astype(int)
-
-df_feat = df_chart.dropna()
-
-if df_feat.empty:
-    st.warning("Not enough data to compute indicators yet.")
-    st.stop()
-
+df_feat = df.dropna()
 latest = df_feat.iloc[-1]
 
 # -------------------------------------------------
-# ML MODEL TRAIN & PREDICT (DUMMY)
+# ML UC PROBABILITY (DUMMY MODEL)
 # -------------------------------------------------
 model = RandomForestClassifier(
     n_estimators=100,
@@ -141,79 +162,65 @@ model = RandomForestClassifier(
     random_state=42
 )
 
-# train dummy model (placeholder)
 X_dummy = np.random.rand(100, 4)
 y_dummy = np.random.randint(0, 2, 100)
 model.fit(X_dummy, y_dummy)
 
 X_live = np.array([
     latest["RSI"],
-    latest["Price_Change"],
+    latest["Pct_Change"],
     latest["Vol_Ratio"],
     latest["Near_High"]
 ]).reshape(1, -1)
 
-uc_probability = model.predict_proba(X_live)[0][1] * 100
+uc_prob = model.predict_proba(X_live)[0][1] * 100
 
 # -------------------------------------------------
-# METRICS FOR SELECTED STOCK
+# METRICS
 # -------------------------------------------------
-st.subheader(f"📈 {selected_stock.replace('.NS','')} – Detailed Metrics")
-
 col1, col2, col3 = st.columns(3)
-
-col1.metric("UC Probability (%)", f"{uc_probability:.2f}")
+col1.metric("UC Probability (%)", f"{uc_prob:.2f}")
 col2.metric("RSI", f"{latest['RSI']:.1f}")
-col3.metric("Vol Ratio", f"{latest['Vol_Ratio']:.2f}")
+col3.metric("Volume Ratio", f"{latest['Vol_Ratio']:.2f}")
 
 # -------------------------------------------------
-# CANDLESTICK + VOLUME
+# DETAILED CHART
 # -------------------------------------------------
 fig = go.Figure()
-
 fig.add_candlestick(
-    x=df_chart.index,
-    open=df_chart["Open"],
-    high=df_chart["High"],
-    low=df_chart["Low"],
-    close=df_chart["Close"],
-    name="Price"
+    x=df.index,
+    open=df["Open"],
+    high=df["High"],
+    low=df["Low"],
+    close=df["Close"]
 )
-
 fig.add_bar(
-    x=df_chart.index,
-    y=df_chart["Volume"],
-    name="Volume",
+    x=df.index,
+    y=df["Volume"],
     yaxis="y2",
     opacity=0.3
 )
 
 fig.update_layout(
-    title=f"{selected_stock.replace('.NS','')} – Price Action",
-    height=600,
+    title=f"{selected_stock.replace('.NS','')} – Intraday Chart",
+    height=500,
     xaxis_rangeslider_visible=False,
-    yaxis2=dict(
-        overlaying="y",
-        side="right",
-        showgrid=False
-    )
+    yaxis2=dict(overlaying="y", side="right", showgrid=False)
 )
 
 st.plotly_chart(fig, use_container_width=True)
 
 # -------------------------------------------------
-# UC SIGNAL INTERPRETATION
+# UC INTERPRETATION
 # -------------------------------------------------
-if uc_probability >= 75:
-    st.success("🔥 HIGH UC Probability")
-elif uc_probability >= 55:
-    st.warning("⚡ Moderate UC Probability")
+if uc_prob >= 75:
+    st.success("🔥 HIGH Upper Circuit Probability")
+elif uc_prob >= 55:
+    st.warning("⚡ MODERATE Upper Circuit Probability")
 else:
-    st.info("❄ Low UC Probability")
+    st.info("❄ LOW Upper Circuit Probability")
 
 # -------------------------------------------------
 # FOOTER
 # -------------------------------------------------
-st.caption(
-    "⚠️ Live rates + UC indication tool. UC probability ≠ guaranteed outcome."
-)
+st.caption("⚠️ Educational tool only. UC probability is not a guarantee.")
